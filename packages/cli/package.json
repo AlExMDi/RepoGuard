@@ -1,0 +1,18 @@
+{
+  "name": "@repoguard/cli",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@repoguard/core": "workspace:*",
+    "@repoguard/scanner-secrets": "workspace:*",
+    "@repoguard/scanner-deps": "workspace:*",
+    "@repoguard/scanner-misconfig": "workspace:*",
+    "@repoguard/adapter-git": "workspace:*",
+    "@repoguard/adapter-osv": "workspace:*",
+    "@repoguard/adapter-sqlite": "workspace:*",
+    "@repoguard/reporters": "workspace:*"
+  }
+}

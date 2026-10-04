@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src"],
+  "references": [
+    { "path": "../core" },
+    { "path": "../scanner-secrets" },
+    { "path": "../scanner-deps" },
+    { "path": "../scanner-misconfig" },
+    { "path": "../adapter-git" },
+    { "path": "../adapter-osv" },
+    { "path": "../adapter-sqlite" },
+    { "path": "../reporters" }
+  ]
+}

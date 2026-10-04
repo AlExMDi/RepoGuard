@@ -1,0 +1,14 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./packages/scanner-secrets" },
+    { "path": "./packages/scanner-deps" },
+    { "path": "./packages/scanner-misconfig" },
+    { "path": "./packages/adapter-git" },
+    { "path": "./packages/adapter-osv" },
+    { "path": "./packages/adapter-sqlite" },
+    { "path": "./packages/reporters" },
+    { "path": "./packages/cli" }
+  ]
+}

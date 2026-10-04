@@ -1,0 +1,11 @@
+{
+  "name": "@repoguard/scanner-deps",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@repoguard/core": "workspace:*"
+  }
+}
