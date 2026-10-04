@@ -100,8 +100,11 @@ Los secretos dentro de `ENV`/`ARG` los detecta el escáner de secretos; aquí no
 
 ### 2.6 Priorización
 Orden **[por defecto]**: severidad desc → categoría (secret > dependency > misconfig) →
-`inWorkingTree` primero → ruta → línea. *Por qué: a igual severidad, un secreto exige
-rotarlo ya, mientras que una dependencia se arregla con un upgrade.*
+`inWorkingTree` primero → ruta → línea → `id`. *Por qué: a igual severidad, un secreto exige
+rotarlo ya, mientras que una dependencia se arregla con un upgrade.* El `id` final
+desempata hallazgos sin línea en el mismo fichero (p. ej. dos vulnerabilidades del mismo
+lockfile), para que el orden no dependa del orden de emisión. Las rutas y el `id` se
+comparan por código, como git, no según el idioma del sistema.
 
 ### 2.7 GitHub Action
 - `action.yml` composite: `setup-node` → `npx repoguard@<versión fijada> scan . --format sarif
@@ -157,7 +160,7 @@ type Severity = "critical" | "high" | "medium" | "low";
 type Category = "secret" | "dependency" | "misconfig";
 
 interface Finding {
-  id: string;                 // fingerprint (secret) o hash estable de ruleId+ubicación
+  id: string;                 // fingerprint (secret) o hash estable sin nº de línea (ver finding-runscan.md §2.3)
   category: Category;
   ruleId: string;
   severity: Severity;
@@ -170,16 +173,35 @@ interface Finding {
   suppressed: boolean;
 }
 
+type WarningCode =
+  | "SCANNER_FAILED" | "SCANNER_CONTRACT_VIOLATION"
+  | "FILE_TOO_LARGE" | "BINARY_SKIPPED" | "LINE_TRUNCATED"
+  | "UNPINNED_DEPENDENCIES" | "LOCKFILE_INVALID" | "REQUIREMENTS_ESCAPE"
+  | "OSV_UNAVAILABLE" | "SHALLOW_CLONE" | "CACHE_RESET"
+  | "BASELINE_INVALID" | "BASELINE_UPDATE_REFUSED" | "BASELINE_SAVE_FAILED";
+
+interface Warning {          // sin campos de texto libre
+  code: WarningCode;
+  path?: string;             // saneada por el reporter
+  count?: number;
+  reason?: "partial-scan" | "invalid-baseline";
+}
+
 interface ScanResult {
+  schemaVersion: 1;
   tool: { name: "repoguard"; version: string; rulesetVersion: string };
   target: { root: string; headCommit?: string; shallow: boolean };
-  categories: Record<Category, { status: "complete" | "incomplete" | "skipped"; warnings: string[] }>;
+  categories: Record<Category, { status: "complete" | "incomplete" | "skipped"; warnings: Warning[] }>;
+  warnings: Warning[];       // globales: caché, baseline, clon superficial
   findings: Finding[];       // ya ordenados (§2.6)
   durationMs: number;
 }
 ```
-`ScanResult` en JSON es el **contrato estable** (con `schemaVersion: 1`). El SARIF se
-genera a partir de él.
+`ScanResult` en JSON es el **contrato estable** (`schemaVersion: 1`). El SARIF se
+genera a partir de él. Los avisos son **estructurados** (código de un conjunto cerrado,
+sin texto libre) y el texto lo genera el reporter. *Por qué: así es imposible por
+construcción que un aviso contenga el contenido de una línea, y las rutas hostiles se
+sanean en un único sitio.* Detalle en [finding-runscan.md](finding-runscan.md).
 
 ### 4.4 Puertos (packages/core/src/ports)
 | Puerto | Responsabilidad | Adaptador MVP |
@@ -191,13 +213,15 @@ genera a partir de él.
 | `BaselineStore` | cargar/guardar el baseline | fichero JSON |
 | `Reporter` | `render(ScanResult) → string` | text, json, sarif |
 
-La lógica pura vive en core: `prioritize`, `dedupeSecrets`, `applyBaseline`, `exitCode`,
-`redact`, `fingerprint` (recibe el hash como función inyectada, porque core no importa
-`node:crypto`).
+La lógica pura vive en `core/src/policy`: `prioritize`, `dedupeSecrets`, `applyBaseline`,
+`exitCode`, `redact`, `fingerprint` (recibe el hash como función inyectada, porque core no
+importa `node:crypto`). La orquestación (`runScan`) vive en `core/src/use-cases`: llama a
+puertos, así que no es lógica pura, pero sigue sin hacer E/S directa.
 
 ### 4.5 Ficheros afectados (todos nuevos; propuesta de layout)
 ```
 packages/core/src/{domain,ports,policy}/…     modelo, puertos y lógica pura
+packages/core/src/use-cases/…                 orquestación (runScan)
 packages/scanner-secrets/                     reglas + motor regex
 packages/scanner-deps/                        parsers de lockfiles
 packages/scanner-misconfig/                   reglas Dockerfile / GHA / .env

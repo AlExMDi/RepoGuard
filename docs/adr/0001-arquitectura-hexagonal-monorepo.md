@@ -41,8 +41,10 @@ organizado alrededor de una API. Al quedar el backend y el dashboard fuera del M
 1. **Arquitectura hexagonal (puertos y adaptadores).**
    - `packages/core` contiene el modelo de dominio (`Finding`, `ScanResult`,
      `Severity`…), los **puertos** (`RepoReader`, `Scanner`, `VulnerabilityDb`,
-     `ScanCache`, `BaselineStore`, `Reporter`) y la **lógica pura**
-     (`src/{domain,ports,policy}`).
+     `ScanCache`, `BaselineStore`, `Reporter`), la **lógica pura**
+     (`src/{domain,ports,policy}`) y los **casos de uso** que orquestan los puertos,
+     como `runScan` (`src/use-cases`). Los casos de uso no son puros (llaman a
+     puertos), pero tampoco hacen E/S directa; por eso no van en `policy/`.
    - `core` **no depende de ningún otro paquete del workspace ni hace E/S**: no importa
      `node:*` ni ninguna librería con efectos. Lo que necesita del entorno (p. ej. el
      hash de `fingerprint`) se le inyecta como función.
