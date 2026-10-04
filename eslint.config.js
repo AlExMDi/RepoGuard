@@ -5,6 +5,12 @@ import { builtinModules } from "node:module";
 import tseslint from "typescript-eslint";
 
 // Invariantes de arquitectura y de no filtrado (ADR 0008).
+
+// Regex anclada y no `group`: los patrones `group` siguen la sintaxis de .gitignore, así que
+// el built-in "domain" bloquearía también "../domain/finding".
+const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const nodeBuiltin = `^(node:.*|(${builtinModules.map(escape).join("|")})(/.*)?)$`;
+
 const unsafeRevealCall = [
   {
     selector: "CallExpression[callee.property.name='unsafeReveal']",
@@ -41,7 +47,7 @@ export default defineConfig(
         {
           patterns: [
             {
-              group: ["node:*", ...builtinModules, ...builtinModules.map((m) => `${m}/*`)],
+              regex: nodeBuiltin,
               message: "core no hace E/S: inyecta lo que necesites como puerto (ADR 0001).",
             },
             {
