@@ -6,7 +6,8 @@ export interface RepoInfo {
 
 export type RepoFatalCode = "NOT_A_GIT_REPO" | "GIT_MISSING";
 
-export type RepoDescription = { kind: "ok"; info: RepoInfo } | { kind: "fatal"; code: RepoFatalCode };
+export type RepoDescription =
+  { kind: "ok"; info: RepoInfo } | { kind: "fatal"; code: RepoFatalCode };
 
 /**
  * Parte de RepoReader que necesita runScan. Los métodos de lectura de ficheros y blobs
