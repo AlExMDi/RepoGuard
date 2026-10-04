@@ -39,6 +39,10 @@ Las dos invariantes se hacen cumplir en `eslint.config.js`:
   desactiva solo en `core/src/domain/secret-value.ts` (la definición),
   `core/src/policy/fingerprint.ts`, `core/src/domain/secret-value.test.ts` y
   `scanner-secrets/src/**`.
+- Igual con `hasPrefix` y `occursIn`, los métodos estáticos de `SecretValue` que responden
+  preguntas sobre el valor: usados en bucle servirían para reconstruirlo. Solo se permiten
+  en `core/src/policy/sanitize-event.ts`. Los permisos son separados: `fingerprint` puede
+  revelar el valor pero no usar los oráculos, y `sanitize-event` al revés.
 
 La lista de built-ins se obtiene en tiempo de configuración de `node:module`, en vez de
 escribirla a mano, para que no se quede desfasada.

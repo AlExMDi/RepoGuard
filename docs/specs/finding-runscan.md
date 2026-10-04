@@ -63,7 +63,19 @@ un `Finding`, cualquier reporter, log o `JSON.stringify` lo filtra.
     en el hash del fingerprint);
   - líneas o columnas que no son enteros ≥ 1, o un `count` negativo;
   - un `publicPrefix` de más de 12 caracteres o que no es prefijo real del secreto
-    (`SecretValue.hasPrefix`, sin sacar el valor en claro).
+    (`SecretValue.hasPrefix`, sin sacar el valor en claro), o que deja menos de 16
+    caracteres ocultos (con menos, el fingerprint del baseline commiteado se podría
+    atacar por fuerza bruta);
+  - un `title`, `kindLabel`, `ruleId`, `path` o `commit` de un secreto que contiene el
+    valor completo (`SecretValue.occursIn`);
+  - un valor que no es un `SecretValue` auténtico (`SecretValue.isGenuine` comprueba la
+    marca privada: un Proxy o una imitación no pasan; la longitud se lee con
+    `SecretValue.lengthOf`, que una subclase no puede falsear);
+  - textos por encima de su límite (`title` 512, `kindLabel` 64, rutas/URLs/nombres
+    4096) o más de 100 `aliases`.
+- **Cada campo se lee una sola vez** (desestructurando) y se valida y copia esa variable
+  local. *Por qué: si se leyera dos veces, un getter podría devolver un valor válido al
+  validar y otro distinto al copiar (TOCTOU).*
 
 ### 2.3 Identificador estable (`Finding.id`)
 | Categoría | `id` |
@@ -101,6 +113,9 @@ un `Finding`, cualquier reporter, log o `JSON.stringify` lo filtra.
   del baseline es entrada no confiable: se normaliza a minúsculas y, si no son 32 bytes
   en hex, el baseline entero cuenta como `invalid`. *Por qué: una sal que `fingerprint`
   rechazara haría fallar todas las coincidencias y dejaría ciega la categoría de secretos.*
+  Igual con los fingerprints de las entradas (64 hex, normalizados a minúsculas para no
+  perder su nota) y con la forma del objeto: lo valida `policy/sanitize-adapter.ts`, y
+  cualquier campo inválido invalida el baseline entero.
 - **`--update-baseline`**:
   - Se **niega** (exit 2, aviso `BASELINE_UPDATE_REFUSED` con un motivo) si:
     - alguna categoría está `incomplete` o `skipped`, o se usó `--no-history`
@@ -138,7 +153,9 @@ un `Finding`, cualquier reporter, log o `JSON.stringify` lo filtra.
 7. Devuelve `{ result: ScanResult, exitCode }`. **No renderiza ni escribe en stdout**; eso
    lo hace `cli` con el `Reporter` elegido.
 
-Los errores fatales (no es un repo git, git ausente, o `describe()` lanza → `REPO_ERROR`)
+Los errores fatales (no es un repo git; git ausente; `describe()` lanza o devuelve una
+forma inválida → `REPO_ERROR`; un escáner con una categoría desconocida →
+`INVALID_SCANNER`)
 **no** se lanzan como excepción: se devuelven como `{ kind: "fatal", code }` con exit 2
 **[por defecto]**. `runScan` no lanza nunca: los fallos de los adaptadores se convierten en
 avisos o fatales, siempre sin el mensaje del error. *Por qué: el CLI
@@ -242,7 +259,8 @@ interface RunScanOptions { failOn: Severity | "none"; history: boolean;
   skipped: Category[]; updateBaseline: boolean; toolVersion: string; rulesetVersion: string }
 type RunScanOutcome =
   | { kind: "ok"; result: ScanResult; exitCode: 0 | 1 | 2 }
-  | { kind: "fatal"; code: "NOT_A_GIT_REPO" | "GIT_MISSING" | "REPO_ERROR"; exitCode: 2 };
+  | { kind: "fatal"; code: "NOT_A_GIT_REPO" | "GIT_MISSING" | "REPO_ERROR" | "INVALID_SCANNER";
+      exitCode: 2 };
 function runScan(deps: RunScanDeps, opts: RunScanOptions): Promise<RunScanOutcome>;
 ```
 
@@ -250,7 +268,7 @@ function runScan(deps: RunScanDeps, opts: RunScanOptions): Promise<RunScanOutcom
 ```
 packages/core/src/domain/{finding,secret-value,raw-secret-match,warning,scan-result,baseline}.ts
 packages/core/src/ports/{scanner,baseline-store,repo-reader,crypto,clock}.ts
-packages/core/src/policy/{fingerprint,redact,secret-draft,dedupe-secrets,apply-baseline,prioritize,exit-code,finding-id,update-baseline,sanitize-event}.ts
+packages/core/src/policy/{fingerprint,redact,secret-draft,dedupe-secrets,apply-baseline,prioritize,exit-code,finding-id,update-baseline,sanitize-event,sanitize-adapter,guards}.ts
 packages/core/src/use-cases/run-scan.ts          ← carpeta nueva (ver §7)
 packages/core/src/index.ts                        reexporta la API pública
 packages/core/src/**/*.test.ts                    tests junto al código (vitest.config.ts solo busca en src/)
@@ -320,9 +338,11 @@ packages/core/src/testing/{fakes,findings}.ts     dobles y helpers de test (no s
 ## 7. Decisiones resueltas tras la revisión
 
 ### Revisión de la rama `feat/3-core-domain` (agentes `architect` y `security-reviewer`)
-Corregido en la rama: validación en runtime (§2.2), sal (§2.5), `runScan` sin excepciones
-(§2.7), `RepoReader.describe()` (§4.2), regla ESLint ampliada (ADR 0008) y desempate final
-por `id` en `prioritize` (mvp §2.6). **Requisitos para paquetes futuros**:
+Dos rondas de revisión. Corregido en la rama: validación en runtime de escáneres y
+adaptadores, con lectura única de cada campo (§2.2, §2.5), `SecretValue` a prueba de
+imitaciones (§2.2), `runScan` sin excepciones (§2.7), `RepoReader.describe()` (§4.2),
+regla ESLint ampliada a cualquier mención y a los oráculos `hasPrefix`/`occursIn`
+(ADR 0008) y desempate final por `id` en `prioritize` (mvp §2.6). **Requisitos para paquetes futuros**:
 - **scanner-misconfig**: el `anchor` debe incluir el contenido que identifica el problema
   (la expresión `${{ … }}`, la imagen de `FROM`, la URL de `ADD`), no solo su posición.
   Con el mismo anchor, dos hallazgos comparten id, y suprimir uno suprimiría hallazgos
