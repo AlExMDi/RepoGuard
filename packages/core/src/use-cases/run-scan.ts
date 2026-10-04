@@ -198,30 +198,38 @@ async function collect(
  */
 function accept(event: unknown, out: Collected, salt: string, hash: Hasher): boolean {
   if (typeof event !== "object" || event === null) return false;
-  const e = event as Record<string, unknown>;
-  switch (e.type) {
+  // Cada campo se lee una sola vez (ver policy/sanitize-event).
+  const {
+    type,
+    warning: rawWarning,
+    status,
+    match: rawMatch,
+    finding,
+    anchor,
+  } = event as Record<string, unknown>;
+  switch (type) {
     case "warning": {
-      const warning = sanitizeWarning(e.warning);
+      const warning = sanitizeWarning(rawWarning);
       if (!warning) return false;
       out.warnings.push(warning);
       return true;
     }
     case "status":
-      if (e.status !== "incomplete") return false;
+      if (status !== "incomplete") return false;
       out.status = "incomplete";
       return true;
     case "secret": {
       if (out.category !== "secret") return false;
-      const match = sanitizeSecretMatch(e.match);
+      const match = sanitizeSecretMatch(rawMatch);
       if (!match) return false;
       // Aquí se descarta el SecretValue: SecretOccurrence solo lleva fingerprint y redacción.
       out.secrets.push(secretDraft(match, salt, hash));
       return true;
     }
     case "finding": {
-      const draft = sanitizeFindingDraft(e.finding, out.category);
-      if (!draft || typeof e.anchor !== "string") return false;
-      const id = findingId(draft, e.anchor, hash);
+      const draft = sanitizeFindingDraft(finding, out.category);
+      if (!draft || typeof anchor !== "string") return false;
+      const id = findingId(draft, anchor, hash);
       if (id === null) return false;
       out.findings.push({ ...draft, id, suppressed: false });
       return true;

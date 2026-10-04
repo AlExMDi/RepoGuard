@@ -8,6 +8,10 @@ import type { FindingDraft } from "../ports/scanner";
 // Los tipos de TypeScript solo existen al compilar: un escáner con un bug puede enviar
 // cualquier cosa. Cada función reconstruye el objeto campo a campo (lista blanca) y
 // devuelve null si algo no encaja; runScan lo trata como SCANNER_CONTRACT_VIOLATION.
+//
+// Regla de oro: cada campo se lee UNA vez (desestructurando) y se valida y copia esa
+// variable local. Leerlo dos veces permitiría que un getter devolviera un valor válido al
+// validar y otro distinto al copiar (TOCTOU).
 
 /** Ids de regla de RepoGuard y de OSV (GHSA-…, CVE-…, PYSEC-…): sin espacios ni control. */
 const RULE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -15,12 +19,28 @@ const RULE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SECRET_RULE_ID = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 /** Un prefijo público largo dejaría ver parte del secreto en `redacted`. */
 const MAX_PUBLIC_PREFIX = 12;
+/** Caracteres que deben quedar ocultos tras el prefijo: con menos, el fingerprint del baseline commiteado se podría romper por fuerza bruta. */
+const MIN_HIDDEN_CHARS = 16;
+const MAX_ALIASES = 100;
+const MAX_TITLE = 512;
+const MAX_LABEL = 64;
+/** Rutas, URLs, nombres y versiones. */
+const MAX_FIELD = 4096;
 
 type Obj = Record<string, unknown>;
 
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
 const isStr = (v: unknown): v is string => typeof v === "string";
+const strMax =
+  (max: number) =>
+  (v: unknown): v is string =>
+    isStr(v) && v.length <= max;
+const isField = strMax(MAX_FIELD);
+const isTitle = strMax(MAX_TITLE);
+const isLabel = strMax(MAX_LABEL);
+const isRuleId = (v: unknown): v is string => isStr(v) && RULE_ID.test(v);
 const isPosInt = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 1;
+const isCount = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0;
 const isOneOf = <T extends string>(list: readonly T[], v: unknown): v is T =>
   isStr(v) && (list as readonly string[]).includes(v);
 
@@ -31,59 +51,77 @@ function optional<T>(v: unknown, ok: (x: unknown) => x is T): T | undefined | nu
 }
 
 export function sanitizeWarning(input: unknown): Warning | null {
-  if (!isObj(input) || !isOneOf(WARNING_CODES, input.code)) return null;
-  const path = optional(input.path, isStr);
-  const count = optional(
-    input.count,
-    (v): v is number => Number.isInteger(v) && (v as number) >= 0,
-  );
-  const reason = optional(input.reason, (v): v is Warning["reason"] & string =>
+  if (!isObj(input)) return null;
+  const { code: rawCode, path: rawPath, count: rawCount, reason: rawReason } = input;
+  if (!isOneOf(WARNING_CODES, rawCode)) return null;
+  const path = optional(rawPath, isField);
+  const count = optional(rawCount, isCount);
+  const reason = optional(rawReason, (v): v is NonNullable<Warning["reason"]> =>
     isOneOf(WARNING_REASONS, v),
   );
   if (path === null || count === null || reason === null) return null;
   return {
-    code: input.code,
+    code: rawCode,
     ...(path !== undefined && { path }),
     ...(count !== undefined && { count }),
     ...(reason !== undefined && { reason }),
   };
 }
 
-function sanitizeFileLocation(loc: Obj): Extract<FindingLocation, { kind: "file" }> | null {
-  if (!isStr(loc.path)) return null;
-  const line = optional(loc.line, isPosInt);
-  const column = optional(loc.column, isPosInt);
-  const commit = optional(loc.commit, isStr);
+function sanitizeFileLocation(input: Obj): Extract<FindingLocation, { kind: "file" }> | null {
+  const { path, line: rawLine, column: rawColumn, commit: rawCommit } = input;
+  if (!isField(path)) return null;
+  const line = optional(rawLine, isPosInt);
+  const column = optional(rawColumn, isPosInt);
+  const commit = optional(rawCommit, isField);
   if (line === null || column === null || commit === null) return null;
   return {
     kind: "file",
-    path: loc.path,
+    path,
     ...(line !== undefined && { line }),
     ...(column !== undefined && { column }),
     ...(commit !== undefined && { commit }),
   };
 }
 
-function sanitizeLocation(loc: unknown): FindingLocation | null {
-  if (!isObj(loc)) return null;
-  if (loc.kind === "file") return sanitizeFileLocation(loc);
-  if (loc.kind === "package") {
-    const { lockfile, ecosystem, name, version } = loc;
-    if (!isStr(lockfile) || !isStr(ecosystem) || !isStr(name) || !isStr(version)) return null;
+function sanitizeLocation(input: unknown): FindingLocation | null {
+  if (!isObj(input)) return null;
+  const { kind } = input;
+  if (kind === "file") return sanitizeFileLocation(input);
+  if (kind === "package") {
+    const { lockfile, ecosystem, name, version } = input;
+    if (!isField(lockfile) || !isField(ecosystem) || !isField(name) || !isField(version)) {
+      return null;
+    }
     return { kind: "package", lockfile, ecosystem, name, version };
   }
   return null;
 }
 
-function sanitizeVuln(v: unknown): FindingDraft["vuln"] | null {
-  if (!isObj(v) || !isStr(v.osvId) || !isStr(v.url)) return null;
-  if (!Array.isArray(v.aliases) || !v.aliases.every(isStr)) return null;
-  const fixedIn = optional(v.fixedIn, isStr);
+/**
+ * Copia acotada de un array no confiable: lee `length` una vez, rechaza antes de recorrer
+ * si es enorme (un array disperso de millones de huecos agotaría la memoria) y lee cada
+ * posición una sola vez. Los huecos quedan como `undefined` y no pasan la validación.
+ */
+function boundedCopy(input: unknown, max: number): unknown[] | null {
+  if (!Array.isArray(input)) return null;
+  const n: unknown = input.length;
+  if (!Number.isInteger(n) || (n as number) > max) return null;
+  return Array.from({ length: n as number }, (_, i) => input[i] as unknown);
+}
+
+function sanitizeVuln(input: unknown): FindingDraft["vuln"] | null {
+  if (!isObj(input)) return null;
+  const { osvId, url, aliases: rawAliases, fixedIn: rawFixedIn } = input;
+  if (!isRuleId(osvId) || !isField(url)) return null;
+  const aliases = boundedCopy(rawAliases, MAX_ALIASES);
+  if (aliases === null || !aliases.every(isRuleId)) return null;
+  const fixedIn = optional(rawFixedIn, isField);
   if (fixedIn === null) return null;
   return {
-    osvId: v.osvId,
-    aliases: [...v.aliases],
-    url: v.url,
+    osvId,
+    aliases: aliases as string[],
+    url,
     ...(fixedIn !== undefined && { fixedIn }),
   };
 }
@@ -93,36 +131,60 @@ function sanitizeVuln(v: unknown): FindingDraft["vuln"] | null {
  * RawSecretMatch. `expected` es la categoría del escáner que lo emitió.
  */
 export function sanitizeFindingDraft(input: unknown, expected: Category): FindingDraft | null {
-  if (!isObj(input) || input.category !== expected || expected === "secret") return null;
-  const { ruleId, severity, title } = input;
-  if (!isStr(ruleId) || !RULE_ID.test(ruleId)) return null;
-  if (!isOneOf<Severity>(SEVERITIES, severity) || !isStr(title)) return null;
+  if (!isObj(input) || expected === "secret") return null;
+  const { category, ruleId, severity, title, location: rawLocation, vuln: rawVuln } = input;
+  if (category !== expected || !isRuleId(ruleId)) return null;
+  if (!isOneOf<Severity>(SEVERITIES, severity) || !isTitle(title)) return null;
 
-  const location = sanitizeLocation(input.location);
+  const location = sanitizeLocation(rawLocation);
   if (location === null) return null;
   const base = { category: expected, ruleId, severity, title, location };
 
   if (expected === "dependency") {
-    const vuln = sanitizeVuln(input.vuln);
+    const vuln = sanitizeVuln(rawVuln);
     return location.kind === "package" && vuln ? { ...base, vuln } : null;
   }
   return location.kind === "file" ? base : null;
 }
 
 export function sanitizeSecretMatch(input: unknown): RawSecretMatch | null {
-  if (!isObj(input) || !SecretValue.isGenuine(input.value)) return null;
-  const { ruleId, severity, title, publicPrefix, kindLabel, value, inWorkingTree, ordinal } = input;
+  if (!isObj(input)) return null;
+  const {
+    ruleId,
+    severity,
+    title,
+    publicPrefix,
+    kindLabel,
+    value,
+    location: rawLocation,
+    inWorkingTree,
+    ordinal,
+  } = input;
+  if (!SecretValue.isGenuine(value)) return null;
   if (!isStr(ruleId) || !SECRET_RULE_ID.test(ruleId)) return null;
-  if (!isOneOf<Severity>(SEVERITIES, severity) || !isStr(title) || !isStr(kindLabel)) return null;
-  if (typeof inWorkingTree !== "boolean" || !Number.isFinite(ordinal)) return null;
+  if (!isOneOf<Severity>(SEVERITIES, severity) || !isTitle(title) || !isLabel(kindLabel)) {
+    return null;
+  }
+  if (typeof inWorkingTree !== "boolean" || typeof ordinal !== "number") return null;
+  if (!Number.isFinite(ordinal)) return null;
+
+  let prefixLength = 0;
   if (publicPrefix !== null) {
     if (!isStr(publicPrefix) || publicPrefix.length > MAX_PUBLIC_PREFIX) return null;
     if (!SecretValue.hasPrefix(value, publicPrefix)) return null;
+    prefixLength = publicPrefix.length;
   }
+  if (SecretValue.lengthOf(value) - prefixLength < MIN_HIDDEN_CHARS) return null;
 
-  if (!isObj(input.location)) return null;
-  const loc = sanitizeFileLocation(input.location);
-  if (!loc || loc.line === undefined || loc.column === undefined) return null;
+  if (!isObj(rawLocation)) return null;
+  const location = sanitizeFileLocation(rawLocation);
+  if (!location || location.line === undefined || location.column === undefined) return null;
+
+  // Ningún texto que acabe en la salida puede contener el secreto completo (p. ej. un bug
+  // que meta la línea analizada en kindLabel).
+  const texts = [ruleId, title, kindLabel, location.path, location.commit ?? ""];
+  if (texts.some((text) => SecretValue.occursIn(value, text))) return null;
+
   return {
     ruleId,
     severity,
@@ -131,12 +193,12 @@ export function sanitizeSecretMatch(input: unknown): RawSecretMatch | null {
     kindLabel,
     value,
     location: {
-      path: loc.path,
-      line: loc.line,
-      column: loc.column,
-      ...(loc.commit !== undefined && { commit: loc.commit }),
+      path: location.path,
+      line: location.line,
+      column: location.column,
+      ...(location.commit !== undefined && { commit: location.commit }),
     },
     inWorkingTree,
-    ordinal: ordinal as number,
+    ordinal,
   };
 }
