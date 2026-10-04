@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Baseline } from "../domain/baseline";
+import type { BaselineLoad } from "../ports/baseline-store";
+import type { RepoReader } from "../ports/repo-reader";
 import type { Scanner, ScannerEvent } from "../ports/scanner";
 import {
   RAW_SECRET,
@@ -405,5 +407,55 @@ describe("runScan: validación en runtime", () => {
     const info = { root: "/repo", shallow: false, gitDir: CANARY };
     const { d, o } = setup({ repo: fakeRepo({ kind: "ok", info }) });
     expect(ok(await runScan(d, o)).result.target).toEqual({ root: "/repo", shallow: false });
+  });
+});
+
+// Segunda revisión de seguridad (B-3, B-4, B-6): lo que devuelven los adaptadores y el
+// cableado de cli también se valida; runScan no lanza nunca.
+describe("runScan: adaptadores y cableado", () => {
+  const CANARY = `TOKEN=${RAW_SECRET}`;
+
+  it("un BaselineStore que devuelve una forma inválida se trata como baseline inválido", async () => {
+    const baseline = memoryBaseline({ kind: "valid" } as unknown as BaselineLoad);
+    const { d, o } = setup({ baseline: baseline.store });
+    const out = ok(await runScan(d, o));
+    expect(out.result.warnings).toEqual([{ code: "BASELINE_INVALID" }]);
+  });
+
+  it("describe() con una forma inválida es fatal REPO_ERROR", async () => {
+    const repo = { describe: async () => ({ kind: "ok", info: { root: { x: CANARY } } }) };
+    const { d, o } = setup({ repo: repo as unknown as RepoReader });
+    expect(await runScan(d, o)).toEqual({ kind: "fatal", code: "REPO_ERROR", exitCode: 2 });
+  });
+
+  it("un escáner con una categoría desconocida es fatal (lo desconocido bloquea)", async () => {
+    const typo = fakeScanner("secret", [{ type: "status", status: "incomplete" }]).scanner;
+    const bad = { ...typo, category: "secrets" } as unknown as Scanner;
+    const { d, o } = setup({ scanners: [bad] });
+    expect(await runScan(d, o)).toEqual({ kind: "fatal", code: "INVALID_SCANNER", exitCode: 2 });
+  });
+
+  it("un escáner cuyo getter de categoría lanza es fatal sin el mensaje", async () => {
+    const bad = {
+      get category(): never {
+        throw new Error(CANARY);
+      },
+      scan: fakeScanner("secret", []).scanner.scan,
+    } as Scanner;
+    const { d, o } = setup({ scanners: [bad] });
+    const out = await runScan(d, o);
+    expect(out).toEqual({ kind: "fatal", code: "INVALID_SCANNER", exitCode: 2 });
+  });
+
+  it("fingerprints en mayúsculas suprimen y conservan su nota al actualizar (B-6)", async () => {
+    const salt = "33".repeat(32);
+    const first = setup({ random: fixedRandom(0x33) });
+    const ids = ok(await runScan(first.d, first.o)).result.findings.map((x) => x.id);
+    const entries = ids.map((id) => ({ fingerprint: id.toUpperCase(), ruleId: "r", note: "ok" }));
+    const baseline = memoryBaseline({ kind: "valid", baseline: { version: 1, salt, entries } });
+    const { d, o } = setup({ baseline: baseline.store }, { updateBaseline: true });
+    const out = ok(await runScan(d, o));
+    expect(out.result.findings.every((x) => x.suppressed)).toBe(true);
+    expect(baseline.saved[0]?.entries.every((e) => e.note === "ok")).toBe(true);
   });
 });

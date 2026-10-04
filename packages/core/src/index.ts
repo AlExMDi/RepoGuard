@@ -20,6 +20,7 @@ export type { FindingDraft, ScanContext, Scanner, ScannerEvent } from "./ports/s
 export {
   runScan,
   type RunScanDeps,
+  type RunScanFatalCode,
   type RunScanOptions,
   type RunScanOutcome,
 } from "./use-cases/run-scan";

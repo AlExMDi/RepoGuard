@@ -1,4 +1,5 @@
 import { CATEGORIES, type Category, type FailOn, type Finding } from "../domain/finding";
+import { isOneOf } from "../policy/guards";
 import type { CategoryReport, CategoryStatus, ScanResult } from "../domain/scan-result";
 import type { Warning, WarningCode } from "../domain/warning";
 import type { BaselineLoad, BaselineStore } from "../ports/baseline-store";
@@ -10,8 +11,8 @@ import { applyBaseline } from "../policy/apply-baseline";
 import { dedupeSecrets } from "../policy/dedupe-secrets";
 import { exitCode } from "../policy/exit-code";
 import { findingId } from "../policy/finding-id";
-import { normalizeSalt } from "../policy/fingerprint";
 import { prioritize } from "../policy/prioritize";
+import { sanitizeBaselineLoad, sanitizeRepoDescription } from "../policy/sanitize-adapter";
 import {
   sanitizeFindingDraft,
   sanitizeSecretMatch,
@@ -41,9 +42,12 @@ export interface RunScanOptions {
   rulesetVersion: string;
 }
 
+/** INVALID_SCANNER: error de cableado en cli (categoría desconocida o que no se puede leer). */
+export type RunScanFatalCode = RepoFatalCode | "INVALID_SCANNER";
+
 export type RunScanOutcome =
   | { kind: "ok"; result: ScanResult; exitCode: 0 | 1 | 2 }
-  | { kind: "fatal"; code: RepoFatalCode; exitCode: 2 };
+  | { kind: "fatal"; code: RunScanFatalCode; exitCode: 2 };
 
 /** Lo que produjo un escáner. Nunca contiene un SecretValue. */
 interface Collected {
@@ -65,17 +69,24 @@ export async function runScan(deps: RunScanDeps, opts: RunScanOptions): Promise<
   const repo = await describeRepo(deps.repo);
   if (repo.kind === "fatal") return { kind: "fatal", code: repo.code, exitCode: 2 };
 
+  // Lo desconocido bloquea: un escáner con una categoría mal escrita perdería su estado
+  // `incomplete` en silencio y el gate podría dar 0.
+  const scanners = categorize(deps.scanners);
+  if (scanners === null) return { kind: "fatal", code: "INVALID_SCANNER", exitCode: 2 };
+
   const warnings: Warning[] = [];
   if (repo.info.shallow) warnings.push({ code: "SHALLOW_CLONE" });
 
-  const load = withNormalizedSalt(await loadBaseline(deps.baseline));
+  const load = await loadBaseline(deps.baseline);
   if (load.kind === "invalid") warnings.push({ code: "BASELINE_INVALID" });
   const salt = load.kind === "valid" ? load.baseline.salt : toHex(deps.random(32));
 
   const ctx: ScanContext = { repo: repo.info, history: opts.history };
-  const active = deps.scanners.filter((s) => !opts.skipped.includes(s.category));
+  const active = scanners.filter((s) => !opts.skipped.includes(s.category));
   // Concurrentes: el orden final lo fija prioritize, no la llegada de los eventos.
-  const collected = await Promise.all(active.map((s) => collect(s, ctx, salt, deps.hash)));
+  const collected = await Promise.all(
+    active.map((s) => collect(s.scanner, s.category, ctx, salt, deps.hash)),
+  );
 
   const categories = buildCategories(collected, opts.skipped);
   const statuses = mapCategories((c) => categories[c].status);
@@ -131,29 +142,33 @@ export async function runScan(deps: RunScanDeps, opts: RunScanOptions): Promise<
 
 async function describeRepo(repo: Pick<RepoReader, "describe">): Promise<RepoDescription> {
   try {
-    return await repo.describe();
+    return sanitizeRepoDescription(await repo.describe());
   } catch {
     return { kind: "fatal", code: "REPO_ERROR" };
   }
 }
 
-/**
- * La sal del baseline viene del repo (entrada no confiable). En mayúsculas se normaliza;
- * si no es hex de 32 bytes, el baseline entero cuenta como inválido. Así una sal rara no
- * puede hacer fallar fingerprint y dejar ciega la categoría de secretos.
- */
-function withNormalizedSalt(load: BaselineLoad): BaselineLoad {
-  if (load.kind !== "valid") return load;
-  const salt = normalizeSalt(load.baseline.salt);
-  return salt === null
-    ? { kind: "invalid" }
-    : { kind: "valid", baseline: { ...load.baseline, salt } };
+/** Lee la categoría de cada escáner una sola vez; null si alguna no es válida o lanza. */
+function categorize(
+  scanners: readonly Scanner[],
+): { scanner: Scanner; category: Category }[] | null {
+  try {
+    const out = scanners.map((scanner) => ({ scanner, category: scanner.category as unknown }));
+    return out.every((s) => isOneOf(CATEGORIES, s.category))
+      ? (out as { scanner: Scanner; category: Category }[])
+      : null;
+  } catch {
+    return null;
+  }
 }
 
-/** Un fallo al leer el baseline se trata como baseline inválido: no suprime ni se sobrescribe. */
+/**
+ * Un fallo al leer el baseline, o una forma inesperada, se trata como baseline inválido:
+ * no suprime ni se sobrescribe. La sal y los fingerprints se normalizan (sanitize-adapter).
+ */
 async function loadBaseline(store: BaselineStore): Promise<BaselineLoad> {
   try {
-    return await store.load();
+    return sanitizeBaselineLoad(await store.load());
   } catch {
     return { kind: "invalid" };
   }
@@ -162,12 +177,13 @@ async function loadBaseline(store: BaselineStore): Promise<BaselineLoad> {
 /** Ejecuta un escáner aislado: sus errores marcan su categoría, nunca abortan el scan (§2.2). */
 async function collect(
   scanner: Scanner,
+  category: Category,
   ctx: ScanContext,
   salt: string,
   hash: Hasher,
 ): Promise<Collected> {
   const out: Collected = {
-    category: scanner.category,
+    category,
     status: "complete",
     warnings: [],
     findings: [],

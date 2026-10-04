@@ -10,7 +10,8 @@ import type { RepoDescription, RepoReader } from "../ports/repo-reader";
 import type { FindingDraft, ScanContext, Scanner, ScannerEvent } from "../ports/scanner";
 
 /**
- * FNV-1a con dos semillas → 16 hex. Determinista y no reversible a efectos del test.
+ * FNV-1a con ocho semillas → 64 hex, la longitud de un SHA-256 real (sanitize-adapter
+ * valida los fingerprints del baseline). Determinista y no reversible a efectos del test.
  * No sirve devolver los bytes en hex: eso sería el secreto codificado y los tests de
  * no filtrado no lo detectarían.
  */
@@ -20,7 +21,11 @@ export const fakeHash: Hasher = (bytes) => {
     for (const b of bytes) h = Math.imul(h ^ b, 0x01000193) >>> 0;
     return h.toString(16).padStart(8, "0");
   };
-  return fnv(0x811c9dc5) + fnv(0x01234567);
+  return [
+    0x811c9dc5, 0x01234567, 0x89abcdef, 0xdeadbeef, 0x0badf00d, 0x13579bdf, 0x2468ace0, 0x7f4a7c15,
+  ]
+    .map(fnv)
+    .join("");
 };
 
 export const fixedRandom =

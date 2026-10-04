@@ -106,7 +106,7 @@ describe("runScan e2e (known-repo en memoria)", () => {
           "findings": [
             {
               "category": "secret",
-              "id": "53295dfbc04ffad9",
+              "id": "53295dfbc04ffad912db0e01be97010101988b237d16f61154cab36843de4dab",
               "location": {
                 "column": 7,
                 "commit": "c1",
@@ -127,7 +127,7 @@ describe("runScan e2e (known-repo en memoria)", () => {
             },
             {
               "category": "misconfig",
-              "id": "0c1450c6115530f4",
+              "id": "0c1450c6115530f4ce90742c4b84152c624c2f3e3dc796bc02f0606fc1075d36",
               "location": {
                 "kind": "file",
                 "path": ".env",

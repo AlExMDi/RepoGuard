@@ -3,6 +3,7 @@ import type { RawSecretMatch } from "../domain/raw-secret-match";
 import { SecretValue } from "../domain/secret-value";
 import { WARNING_CODES, WARNING_REASONS, type Warning } from "../domain/warning";
 import type { FindingDraft } from "../ports/scanner";
+import { boundedCopy, isField, isObj, isOneOf, isStr, optional, strMax, type Obj } from "./guards";
 
 // Validación en runtime de lo que envían los escáneres (spec finding-runscan §2.2).
 // Los tipos de TypeScript solo existen al compilar: un escáner con un bug puede enviar
@@ -24,31 +25,12 @@ const MIN_HIDDEN_CHARS = 16;
 const MAX_ALIASES = 100;
 const MAX_TITLE = 512;
 const MAX_LABEL = 64;
-/** Rutas, URLs, nombres y versiones. */
-const MAX_FIELD = 4096;
 
-type Obj = Record<string, unknown>;
-
-const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
-const isStr = (v: unknown): v is string => typeof v === "string";
-const strMax =
-  (max: number) =>
-  (v: unknown): v is string =>
-    isStr(v) && v.length <= max;
-const isField = strMax(MAX_FIELD);
 const isTitle = strMax(MAX_TITLE);
 const isLabel = strMax(MAX_LABEL);
 const isRuleId = (v: unknown): v is string => isStr(v) && RULE_ID.test(v);
 const isPosInt = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 1;
 const isCount = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0;
-const isOneOf = <T extends string>(list: readonly T[], v: unknown): v is T =>
-  isStr(v) && (list as readonly string[]).includes(v);
-
-/** `undefined` si el campo no está; null si está y no es válido. */
-function optional<T>(v: unknown, ok: (x: unknown) => x is T): T | undefined | null {
-  if (v === undefined) return undefined;
-  return ok(v) ? v : null;
-}
 
 export function sanitizeWarning(input: unknown): Warning | null {
   if (!isObj(input)) return null;
@@ -96,18 +78,6 @@ function sanitizeLocation(input: unknown): FindingLocation | null {
     return { kind: "package", lockfile, ecosystem, name, version };
   }
   return null;
-}
-
-/**
- * Copia acotada de un array no confiable: lee `length` una vez, rechaza antes de recorrer
- * si es enorme (un array disperso de millones de huecos agotaría la memoria) y lee cada
- * posición una sola vez. Los huecos quedan como `undefined` y no pasan la validación.
- */
-function boundedCopy(input: unknown, max: number): unknown[] | null {
-  if (!Array.isArray(input)) return null;
-  const n: unknown = input.length;
-  if (!Number.isInteger(n) || (n as number) > max) return null;
-  return Array.from({ length: n as number }, (_, i) => input[i] as unknown);
 }
 
 function sanitizeVuln(input: unknown): FindingDraft["vuln"] | null {
