@@ -49,8 +49,21 @@ un `Finding`, cualquier reporter, log o `JSON.stringify` lo filtra.
 - Los escáneres se ejecutan **de forma concurrente** **[por defecto]**. *Por qué: la
   latencia de OSV (hasta 5 s) se solapa con el escaneo de secretos; el orden final no
   depende de la concurrencia porque `prioritize` lo fija.*
-- Validación del contrato: si un escáner emite un hallazgo de una categoría que no es la
-  suya, se descarta y se trata igual que una excepción (`SCANNER_CONTRACT_VIOLATION`).
+- **Validación del contrato en runtime** (`policy/sanitize-event.ts`): los tipos de
+  TypeScript solo existen al compilar, así que cada evento se trata como `unknown`, se
+  valida y se **reconstruye campo a campo** (lista blanca). Los campos extra se
+  descartan. Es violación de contrato (`SCANNER_CONTRACT_VIOLATION`, se deja de leer ese
+  escáner y su categoría queda `incomplete`):
+  - un hallazgo de otra categoría, o un secreto emitido por un escáner que no es de
+    secretos;
+  - una severidad, código de aviso, `reason` o `kind` fuera de su enum. *Por qué: con una
+    severidad desconocida (p. ej. `"CRITICAL"` de OSV), `exitCode` no la contaría y el
+    gate de CI pasaría en silencio. Lo desconocido bloquea, no deja pasar.*
+  - un `ruleId` con espacios o caracteres de control (en secretos, solo kebab-case: entra
+    en el hash del fingerprint);
+  - líneas o columnas que no son enteros ≥ 1, o un `count` negativo;
+  - un `publicPrefix` de más de 12 caracteres o que no es prefijo real del secreto
+    (`SecretValue.hasPrefix`, sin sacar el valor en claro).
 
 ### 2.3 Identificador estable (`Finding.id`)
 | Categoría | `id` |
@@ -84,7 +97,10 @@ un `Finding`, cualquier reporter, log o `JSON.stringify` lo filtra.
 - **Lectura**: el resultado tiene tres variantes: `missing`, `valid` e `invalid`. Si es
   `invalid`, se emite el aviso `BASELINE_INVALID`, no se suprime nada y la sal se genera
   al azar (mvp §2.5).
-- **Sal**: se usa la del baseline si es válido; si no, `random(32)` (inyectado).
+- **Sal**: se usa la del baseline si es válido; si no, `random(32)` (inyectado). La sal
+  del baseline es entrada no confiable: se normaliza a minúsculas y, si no son 32 bytes
+  en hex, el baseline entero cuenta como `invalid`. *Por qué: una sal que `fingerprint`
+  rechazara haría fallar todas las coincidencias y dejaría ciega la categoría de secretos.*
 - **`--update-baseline`**:
   - Se **niega** (exit 2, aviso `BASELINE_UPDATE_REFUSED` con un motivo) si:
     - alguna categoría está `incomplete` o `skipped`, o se usó `--no-history`
@@ -97,12 +113,15 @@ un `Finding`, cualquier reporter, log o `JSON.stringify` lo filtra.
     vigentes, y desaparecen las obsoletas. Las entradas se ordenan por `fingerprint`
     **[por defecto]**, para que el diff del PR sea mínimo y estable.
   - Tras escribir, todos los hallazgos quedan `suppressed: true` y el exit code es 0.
+  - Si `save` lanza, el informe se devuelve igualmente, con el aviso global
+    `BASELINE_SAVE_FAILED` (sin el mensaje del error), nada suprimido y exit 2.
 
 ### 2.6 Avisos estructurados ⚠ (incorporado a mvp §4.3)
 - Se usa `Warning = { code: WarningCode; path?: string; count?: number; reason?: string }`.
   `code` y `reason` son enums cerrados. **No existe ningún campo de texto libre.** *Por
-  qué: así es imposible por construcción meter contenido de una línea en un aviso; la
-  ruta se sanea en el reporter, que es quien genera el texto.*
+  qué: así no se puede meter contenido de una línea en un aviso; la ruta se sanea en el
+  reporter, que es quien genera el texto.* El tipo lo garantiza al compilar y
+  `sanitizeWarning` en runtime (§2.2).
 - Hay avisos por categoría (`categories[c].warnings`) y avisos globales
   (`ScanResult.warnings`) para lo que no pertenece a ninguna: caché, baseline y clon
   superficial.
@@ -119,8 +138,10 @@ un `Finding`, cualquier reporter, log o `JSON.stringify` lo filtra.
 7. Devuelve `{ result: ScanResult, exitCode }`. **No renderiza ni escribe en stdout**; eso
    lo hace `cli` con el `Reporter` elegido.
 
-Los errores fatales (no es un repo git, git ausente) **no** se lanzan como excepción: se
-devuelven como `{ kind: "fatal", code }` con exit 2 **[por defecto]**. *Por qué: el CLI
+Los errores fatales (no es un repo git, git ausente, o `describe()` lanza → `REPO_ERROR`)
+**no** se lanzan como excepción: se devuelven como `{ kind: "fatal", code }` con exit 2
+**[por defecto]**. `runScan` no lanza nunca: los fallos de los adaptadores se convierten en
+avisos o fatales, siempre sin el mensaje del error. *Por qué: el CLI
 no tiene que hacer `catch` genéricos que podrían imprimir el mensaje de una excepción con
 datos del repo.*
 
@@ -169,7 +190,7 @@ type WarningCode =
   | "FILE_TOO_LARGE" | "BINARY_SKIPPED" | "LINE_TRUNCATED"
   | "UNPINNED_DEPENDENCIES" | "LOCKFILE_INVALID" | "REQUIREMENTS_ESCAPE"
   | "OSV_UNAVAILABLE" | "SHALLOW_CLONE" | "CACHE_RESET"
-  | "BASELINE_INVALID" | "BASELINE_UPDATE_REFUSED";
+  | "BASELINE_INVALID" | "BASELINE_UPDATE_REFUSED" | "BASELINE_SAVE_FAILED";
 interface Warning { code: WarningCode; path?: string; count?: number;
   reason?: "partial-scan" | "invalid-baseline" }
 
@@ -186,10 +207,16 @@ interface ScanResult {
 ### 4.2 Puertos (`packages/core/src/ports/`)
 ```ts
 type ScannerEvent =
-  | { type: "finding"; finding: Omit<Finding, "id" | "suppressed">; anchor: string }
+  | { type: "finding"; finding: Omit<Finding, "id" | "suppressed" | "secret">; anchor: string }
   | { type: "secret"; match: RawSecretMatch }
   | { type: "warning"; warning: Warning }
   | { type: "status"; status: "incomplete" };  // p. ej. OSV caído
+
+// Lo que runScan necesita del repo. Asíncrono porque exige ejecutar git, y devuelve el
+// fallo como valor. Los métodos de lectura (mvp §4.4) se añaden con los escáneres.
+type RepoDescription = { kind: "ok"; info: RepoInfo }
+  | { kind: "fatal"; code: "NOT_A_GIT_REPO" | "GIT_MISSING" | "REPO_ERROR" };
+interface RepoReader { describe(): Promise<RepoDescription> }
 
 interface Scanner { readonly category: Category;
   scan(ctx: ScanContext): AsyncIterable<ScannerEvent> }
@@ -210,12 +237,12 @@ igualdad exacta, el determinismo es obligatorio.*
 ```ts
 interface RunScanDeps { scanners: Scanner[]; baseline: BaselineStore;
   hash: Hasher; random: RandomBytes; clock: Clock;
-  repo: Pick<RepoReader, "root" | "headCommit" | "isShallow"> }
+  repo: Pick<RepoReader, "describe"> }
 interface RunScanOptions { failOn: Severity | "none"; history: boolean;
   skipped: Category[]; updateBaseline: boolean; toolVersion: string; rulesetVersion: string }
 type RunScanOutcome =
   | { kind: "ok"; result: ScanResult; exitCode: 0 | 1 | 2 }
-  | { kind: "fatal"; code: "NOT_A_GIT_REPO" | "GIT_MISSING"; exitCode: 2 };
+  | { kind: "fatal"; code: "NOT_A_GIT_REPO" | "GIT_MISSING" | "REPO_ERROR"; exitCode: 2 };
 function runScan(deps: RunScanDeps, opts: RunScanOptions): Promise<RunScanOutcome>;
 ```
 
@@ -223,11 +250,11 @@ function runScan(deps: RunScanDeps, opts: RunScanOptions): Promise<RunScanOutcom
 ```
 packages/core/src/domain/{finding,secret-value,raw-secret-match,warning,scan-result,baseline}.ts
 packages/core/src/ports/{scanner,baseline-store,repo-reader,crypto,clock}.ts
-packages/core/src/policy/{fingerprint,redact,dedupe-secrets,apply-baseline,prioritize,exit-code,finding-id,update-baseline}.ts
+packages/core/src/policy/{fingerprint,redact,secret-draft,dedupe-secrets,apply-baseline,prioritize,exit-code,finding-id,update-baseline,sanitize-event}.ts
 packages/core/src/use-cases/run-scan.ts          ← carpeta nueva (ver §7)
 packages/core/src/index.ts                        reexporta la API pública
 packages/core/src/**/*.test.ts                    tests junto al código (vitest.config.ts solo busca en src/)
-packages/core/src/testing/fakes.ts                dobles en memoria (no se exportan desde index.ts)
+packages/core/src/testing/{fakes,findings}.ts     dobles y helpers de test (no se exportan desde index.ts)
 ```
 
 ## 5. Casos de test (los tests van primero)
@@ -285,11 +312,25 @@ packages/core/src/testing/fakes.ts                dobles en memoria (no se expor
 | Baseline hostil que suprime todo | El baseline es entrada no confiable y se valida en el adaptador; el número de suprimidos es visible (mvp §6) |
 | Baseline reescrito con un scan parcial que borra supresiones o, al revés, oculta su desaparición | Se niega con `partial-scan` (§2.5) |
 | Baseline corrupto reemplazado sin revisión, con una sal nueva | Se niega con `invalid-baseline` |
-| Un escáner con un bug emite un hallazgo de otra categoría para saltarse la deduplicación o el baseline | Validación del contrato (§2.2) |
+| Un escáner con un bug emite un hallazgo de otra categoría, una severidad desconocida o campos extra con texto (incluido el secreto) | Validación y reconstrucción en runtime (§2.2) |
+| Sal hostil en el baseline que ciega la detección de secretos | Normalización; si no es válida, baseline `invalid` (§2.5) |
 | Colisión de ids por concatenación ambigua | Codificación canónica en un array JSON (§2.3) |
 | Abuso de `unsafeReveal` en un paquete nuevo | Regla ESLint (§5.4, ADR 0008) y revisión del agente `security-reviewer` |
 
 ## 7. Decisiones resueltas tras la revisión
+
+### Revisión de la rama `feat/3-core-domain` (agentes `architect` y `security-reviewer`)
+Corregido en la rama: validación en runtime (§2.2), sal (§2.5), `runScan` sin excepciones
+(§2.7), `RepoReader.describe()` (§4.2), regla ESLint ampliada (ADR 0008) y desempate final
+por `id` en `prioritize` (mvp §2.6). **Requisitos para paquetes futuros**:
+- **scanner-misconfig**: el `anchor` debe incluir el contenido que identifica el problema
+  (la expresión `${{ … }}`, la imagen de `FROM`, la URL de `ADD`), no solo su posición.
+  Con el mismo anchor, dos hallazgos comparten id, y suprimir uno suprimiría hallazgos
+  nuevos sin que el baseline cambie en el diff del PR.
+- **reporters**: sanear **todo** el texto que viene de fuera, no solo `path`: `title`,
+  `vuln.url`, `osvId` y `aliases` llegan de OSV y pueden traer secuencias ANSI.
+
+### Durante la redacción
 - **Carpeta `use-cases/`** (confirmada): `runScan` llama a puertos, así que no es lógica
   pura y no encaja en `policy/`. Amplía la estructura de ADR 0001 sin contradecir su regla
   de dependencias. Ya figura en mvp §4.4–§4.5.

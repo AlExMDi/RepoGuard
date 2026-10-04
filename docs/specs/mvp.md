@@ -100,8 +100,11 @@ Los secretos dentro de `ENV`/`ARG` los detecta el escáner de secretos; aquí no
 
 ### 2.6 Priorización
 Orden **[por defecto]**: severidad desc → categoría (secret > dependency > misconfig) →
-`inWorkingTree` primero → ruta → línea. *Por qué: a igual severidad, un secreto exige
-rotarlo ya, mientras que una dependencia se arregla con un upgrade.*
+`inWorkingTree` primero → ruta → línea → `id`. *Por qué: a igual severidad, un secreto exige
+rotarlo ya, mientras que una dependencia se arregla con un upgrade.* El `id` final
+desempata hallazgos sin línea en el mismo fichero (p. ej. dos vulnerabilidades del mismo
+lockfile), para que el orden no dependa del orden de emisión. Las rutas y el `id` se
+comparan por código, como git, no según el idioma del sistema.
 
 ### 2.7 GitHub Action
 - `action.yml` composite: `setup-node` → `npx repoguard@<versión fijada> scan . --format sarif
@@ -175,7 +178,7 @@ type WarningCode =
   | "FILE_TOO_LARGE" | "BINARY_SKIPPED" | "LINE_TRUNCATED"
   | "UNPINNED_DEPENDENCIES" | "LOCKFILE_INVALID" | "REQUIREMENTS_ESCAPE"
   | "OSV_UNAVAILABLE" | "SHALLOW_CLONE" | "CACHE_RESET"
-  | "BASELINE_INVALID" | "BASELINE_UPDATE_REFUSED";
+  | "BASELINE_INVALID" | "BASELINE_UPDATE_REFUSED" | "BASELINE_SAVE_FAILED";
 
 interface Warning {          // sin campos de texto libre
   code: WarningCode;

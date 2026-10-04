@@ -27,7 +27,7 @@ importar `node:fs`, así que no podría vivir en core, y solo fallaría al ejecu
 
 Las dos invariantes se hacen cumplir en `eslint.config.js`:
 
-- En `packages/core/src/**`:
+- En `packages/core/**` (todas las extensiones fuente):
   - `no-restricted-imports` con `node:*`, todos los `builtinModules` (con y sin subruta)
     y `@repoguard/*`.
   - `no-restricted-globals` con `process` y `Buffer`.
@@ -55,7 +55,6 @@ escribirla a mano, para que no se quede desfasada.
 
 - La regla protege frente a **errores accidentales**, no frente a alguien que quiera
   saltársela a propósito: `v["unsafe" + "Reveal"]` sigue pasando. Para eso está la revisión.
-
 - `pnpm lint` (y por tanto CI) falla ante cualquier violación, y el editor la marca
   mientras se escribe. El mensaje cita el ADR.
 - Un `// eslint-disable` puede saltarse la regla. Es visible en el diff y lo revisan los
