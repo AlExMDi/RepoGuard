@@ -34,7 +34,18 @@ export function compareFindings(a: Finding, b: Finding): number {
     return aWhere.path < bWhere.path ? -1 : 1;
   }
 
-  return aWhere.line - bWhere.line;
+  if (aWhere.line !== bWhere.line) {
+    return aWhere.line - bWhere.line;
+  }
+
+  const aId = a.id;
+  const bId = b.id;
+
+  if (aId !== bId) {
+    return aId < bId ? -1 : 1;
+  }
+
+  return 0;
 }
 
 /** Devuelve una copia ordenada; no muta la entrada. */

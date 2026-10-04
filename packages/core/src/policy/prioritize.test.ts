@@ -55,6 +55,14 @@ describe("prioritize (mvp §2.6)", () => {
     expect(ids(prioritize(xs))).toEqual(["upper", "lower", "z", "umlaut"]);
   });
 
+  it("si empata en todo, desempata por id (no por orden de emisión)", () => {
+    // Dos vulnerabilidades del mismo lockfile: sin línea, empatan en todos los criterios.
+    const vulnB = f("id-b", "high", "dependency", { path: "pnpm-lock.yaml" });
+    const vulnA = f("id-a", "high", "dependency", { path: "pnpm-lock.yaml" });
+    expect(ids(prioritize([vulnB, vulnA]))).toEqual(["id-a", "id-b"]);
+    expect(ids(prioritize([vulnA, vulnB]))).toEqual(["id-a", "id-b"]);
+  });
+
   it("no muta la entrada y es estable ante permutaciones", () => {
     const xs = [f("1", "low"), f("2", "high", "misconfig"), f("3", "high")];
     const copy = [...xs];
