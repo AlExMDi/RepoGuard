@@ -16,6 +16,11 @@ export class SecretValue {
     return this.#value.length;
   }
 
+  /** Permite validar el prefijo público de una regla sin sacar el valor en claro. */
+  hasPrefix(prefix: string): boolean {
+    return this.#value.startsWith(prefix);
+  }
+
   unsafeReveal(): string {
     return this.#value;
   }

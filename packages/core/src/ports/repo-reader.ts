@@ -4,7 +4,8 @@ export interface RepoInfo {
   shallow: boolean;
 }
 
-export type RepoFatalCode = "NOT_A_GIT_REPO" | "GIT_MISSING";
+/** REPO_ERROR: describe() lanzó una excepción (su mensaje no se conserva). */
+export type RepoFatalCode = "NOT_A_GIT_REPO" | "GIT_MISSING" | "REPO_ERROR";
 
 export type RepoDescription =
   { kind: "ok"; info: RepoInfo } | { kind: "fatal"; code: RepoFatalCode };

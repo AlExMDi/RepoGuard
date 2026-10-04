@@ -3,8 +3,8 @@ import type { RawSecretMatch } from "../domain/raw-secret-match";
 import type { Warning } from "../domain/warning";
 import type { RepoInfo } from "./repo-reader";
 
-/** Hallazgo de deps o misconfig antes de que runScan le asigne id y supresión. */
-export type FindingDraft = Omit<Finding, "id" | "suppressed">;
+/** Hallazgo de deps o misconfig antes de que runScan le asigne id y supresión. Sin `secret`: los secretos llegan solo como RawSecretMatch. */
+export type FindingDraft = Omit<Finding, "id" | "suppressed" | "secret">;
 
 export type ScannerEvent =
   /** `anchor`: clave semántica estable sin número de línea (spec finding-runscan §2.3). */

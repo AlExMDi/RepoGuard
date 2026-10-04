@@ -4,6 +4,12 @@ import type { Hasher } from "../ports/crypto";
 const SALT_HEX = /^[0-9a-f]{64}$/;
 const utf8 = new TextEncoder();
 
+/** Sal en hex minúscula, o null si no son 32 bytes en hex (acepta mayúsculas). */
+export function normalizeSalt(salt: string): string | null {
+  const lower = salt.toLowerCase();
+  return SALT_HEX.test(lower) ? lower : null;
+}
+
 export interface FingerprintInput {
   /** 32 bytes en hex (del baseline o aleatoria por ejecución). */
   salt: string;

@@ -1,16 +1,22 @@
-import type { Category, FailOn, Finding } from "../domain/finding";
+import { CATEGORIES, type Category, type FailOn, type Finding } from "../domain/finding";
 import type { CategoryReport, CategoryStatus, ScanResult } from "../domain/scan-result";
 import type { Warning, WarningCode } from "../domain/warning";
 import type { BaselineLoad, BaselineStore } from "../ports/baseline-store";
 import type { Clock } from "../ports/clock";
 import type { Hasher, RandomBytes } from "../ports/crypto";
-import type { RepoFatalCode, RepoReader } from "../ports/repo-reader";
-import type { ScanContext, Scanner, ScannerEvent } from "../ports/scanner";
+import type { RepoDescription, RepoFatalCode, RepoReader } from "../ports/repo-reader";
+import type { ScanContext, Scanner } from "../ports/scanner";
 import { applyBaseline } from "../policy/apply-baseline";
 import { dedupeSecrets } from "../policy/dedupe-secrets";
 import { exitCode } from "../policy/exit-code";
 import { findingId } from "../policy/finding-id";
+import { normalizeSalt } from "../policy/fingerprint";
 import { prioritize } from "../policy/prioritize";
+import {
+  sanitizeFindingDraft,
+  sanitizeSecretMatch,
+  sanitizeWarning,
+} from "../policy/sanitize-event";
 import { secretDraft, type SecretOccurrence } from "../policy/secret-draft";
 import { updateBaseline } from "../policy/update-baseline";
 
@@ -39,8 +45,6 @@ export type RunScanOutcome =
   | { kind: "ok"; result: ScanResult; exitCode: 0 | 1 | 2 }
   | { kind: "fatal"; code: RepoFatalCode; exitCode: 2 };
 
-const CATEGORIES: readonly Category[] = ["secret", "dependency", "misconfig"];
-
 /** Lo que produjo un escáner. Nunca contiene un SecretValue. */
 interface Collected {
   category: Category;
@@ -52,18 +56,19 @@ interface Collected {
 
 /**
  * Caso de uso principal (spec finding-runscan §2.7). No hace E/S directa: todo pasa por
- * puertos. Los errores de repo se devuelven como `fatal`, nunca como excepción.
+ * puertos y nunca lanza: los errores de repo se devuelven como `fatal` y los de los
+ * adaptadores como avisos, sin su mensaje (spec finding-runscan §2.2 y §2.7).
  */
 export async function runScan(deps: RunScanDeps, opts: RunScanOptions): Promise<RunScanOutcome> {
   const started = deps.clock();
 
-  const repo = await deps.repo.describe();
+  const repo = await describeRepo(deps.repo);
   if (repo.kind === "fatal") return { kind: "fatal", code: repo.code, exitCode: 2 };
 
   const warnings: Warning[] = [];
   if (repo.info.shallow) warnings.push({ code: "SHALLOW_CLONE" });
 
-  const load = await loadBaseline(deps.baseline);
+  const load = withNormalizedSalt(await loadBaseline(deps.baseline));
   if (load.kind === "invalid") warnings.push({ code: "BASELINE_INVALID" });
   const salt = load.kind === "valid" ? load.baseline.salt : toHex(deps.random(32));
 
@@ -92,9 +97,15 @@ export async function runScan(deps: RunScanDeps, opts: RunScanOptions): Promise<
       warnings.push({ code: "BASELINE_UPDATE_REFUSED", reason: outcome.reason });
       code = 2;
     } else {
-      await deps.baseline.save(outcome.baseline);
-      findings = applyBaseline(findings, { kind: "valid", baseline: outcome.baseline });
-      code = exitCode(findings, opts.failOn, statuses);
+      try {
+        await deps.baseline.save(outcome.baseline);
+        findings = applyBaseline(findings, { kind: "valid", baseline: outcome.baseline });
+        code = exitCode(findings, opts.failOn, statuses);
+      } catch {
+        // Sin el mensaje: puede incluir rutas o datos del adaptador. El informe no se pierde.
+        warnings.push({ code: "BASELINE_SAVE_FAILED" });
+        code = 2;
+      }
     }
   }
 
@@ -104,13 +115,39 @@ export async function runScan(deps: RunScanDeps, opts: RunScanOptions): Promise<
     result: {
       schemaVersion: 1,
       tool: { name: "repoguard", version: opts.toolVersion, rulesetVersion: opts.rulesetVersion },
-      target: repo.info,
+      // Campo a campo: lo que añada el adaptador de git no entra en el contrato JSON.
+      target: {
+        root: repo.info.root,
+        ...(repo.info.headCommit !== undefined && { headCommit: repo.info.headCommit }),
+        shallow: repo.info.shallow,
+      },
       categories,
       warnings,
       findings,
       durationMs: deps.clock() - started,
     },
   };
+}
+
+async function describeRepo(repo: Pick<RepoReader, "describe">): Promise<RepoDescription> {
+  try {
+    return await repo.describe();
+  } catch {
+    return { kind: "fatal", code: "REPO_ERROR" };
+  }
+}
+
+/**
+ * La sal del baseline viene del repo (entrada no confiable). En mayúsculas se normaliza;
+ * si no es hex de 32 bytes, el baseline entero cuenta como inválido. Así una sal rara no
+ * puede hacer fallar fingerprint y dejar ciega la categoría de secretos.
+ */
+function withNormalizedSalt(load: BaselineLoad): BaselineLoad {
+  if (load.kind !== "valid") return load;
+  const salt = normalizeSalt(load.baseline.salt);
+  return salt === null
+    ? { kind: "invalid" }
+    : { kind: "valid", baseline: { ...load.baseline, salt } };
 }
 
 /** Un fallo al leer el baseline se trata como baseline inválido: no suprime ni se sobrescribe. */
@@ -155,38 +192,43 @@ async function collect(
   return out;
 }
 
-/** Incorpora un evento; devuelve false si viola el contrato del puerto Scanner. */
-function accept(event: ScannerEvent, out: Collected, salt: string, hash: Hasher): boolean {
-  switch (event.type) {
-    case "warning":
-      out.warnings.push(pickWarning(event.warning));
-      return true;
-    case "status":
-      out.status = "incomplete";
-      return true;
-    case "secret":
-      if (out.category !== "secret") return false;
-      // Aquí se descarta el SecretValue: SecretOccurrence solo lleva fingerprint y redacción.
-      out.secrets.push(secretDraft(event.match, salt, hash));
-      return true;
-    case "finding": {
-      if (event.finding.category !== out.category) return false;
-      const id = findingId(event.finding, event.anchor, hash);
-      if (id === null) return false;
-      out.findings.push({ ...event.finding, id, suppressed: false });
+/**
+ * Incorpora un evento; devuelve false si viola el contrato del puerto Scanner.
+ * El evento se trata como `unknown`: se valida y reconstruye en runtime (policy/sanitize-event).
+ */
+function accept(event: unknown, out: Collected, salt: string, hash: Hasher): boolean {
+  if (typeof event !== "object" || event === null) return false;
+  const e = event as Record<string, unknown>;
+  switch (e.type) {
+    case "warning": {
+      const warning = sanitizeWarning(e.warning);
+      if (!warning) return false;
+      out.warnings.push(warning);
       return true;
     }
+    case "status":
+      if (e.status !== "incomplete") return false;
+      out.status = "incomplete";
+      return true;
+    case "secret": {
+      if (out.category !== "secret") return false;
+      const match = sanitizeSecretMatch(e.match);
+      if (!match) return false;
+      // Aquí se descarta el SecretValue: SecretOccurrence solo lleva fingerprint y redacción.
+      out.secrets.push(secretDraft(match, salt, hash));
+      return true;
+    }
+    case "finding": {
+      const draft = sanitizeFindingDraft(e.finding, out.category);
+      if (!draft || typeof e.anchor !== "string") return false;
+      const id = findingId(draft, e.anchor, hash);
+      if (id === null) return false;
+      out.findings.push({ ...draft, id, suppressed: false });
+      return true;
+    }
+    default:
+      return false;
   }
-}
-
-/** Copia solo los campos conocidos: un escáner con un bug no puede colar texto libre. */
-function pickWarning(w: Warning): Warning {
-  return {
-    code: w.code,
-    ...(w.path !== undefined && { path: w.path }),
-    ...(w.count !== undefined && { count: w.count }),
-    ...(w.reason !== undefined && { reason: w.reason }),
-  };
 }
 
 function buildCategories(

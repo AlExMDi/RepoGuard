@@ -1,5 +1,9 @@
-export type Severity = "critical" | "high" | "medium" | "low";
-export type Category = "secret" | "dependency" | "misconfig";
+// Listas en runtime, no solo tipos: core valida lo que envían los escáneres (spec §2.2).
+export const SEVERITIES = ["critical", "high", "medium", "low"] as const;
+export const CATEGORIES = ["secret", "dependency", "misconfig"] as const;
+
+export type Severity = (typeof SEVERITIES)[number];
+export type Category = (typeof CATEGORIES)[number];
 
 /** Umbral de --fail-on: "none" no hace fallar nunca por hallazgos. */
 export type FailOn = Severity | "none";
