@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyBaseline } from "./apply-baseline";
-import { f } from "./test-findings";
+import { f } from "../testing/findings";
 
 const findings = [f("fp1", "high"), f("fp2", "critical", "misconfig")];
 const baseline = {

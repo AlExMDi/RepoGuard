@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { prioritize } from "./prioritize";
-import { f } from "./test-findings";
+import { f } from "../testing/findings";
 
 const ids = (xs: { id: string }[]) => xs.map((x) => x.id);
 

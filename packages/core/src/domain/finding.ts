@@ -1,6 +1,9 @@
 export type Severity = "critical" | "high" | "medium" | "low";
 export type Category = "secret" | "dependency" | "misconfig";
 
+/** Umbral de --fail-on: "none" no hace fallar nunca por hallazgos. */
+export type FailOn = Severity | "none";
+
 export type FindingLocation =
   | { kind: "file"; path: string; line?: number; column?: number; commit?: string }
   | { kind: "package"; lockfile: string; ecosystem: string; name: string; version: string };

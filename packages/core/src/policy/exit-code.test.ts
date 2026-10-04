@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Category } from "../domain/finding";
 import type { CategoryStatus } from "../domain/scan-result";
 import { exitCode } from "./exit-code";
-import { f } from "./test-findings";
+import { f } from "../testing/findings";
 
 const statuses = (s: Partial<Record<Category, CategoryStatus>> = {}) => ({
   secret: "complete" as CategoryStatus,

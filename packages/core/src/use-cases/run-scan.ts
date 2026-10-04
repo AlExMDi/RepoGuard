@@ -1,4 +1,4 @@
-import type { Category, Finding } from "../domain/finding";
+import type { Category, FailOn, Finding } from "../domain/finding";
 import type { CategoryReport, CategoryStatus, ScanResult } from "../domain/scan-result";
 import type { Warning, WarningCode } from "../domain/warning";
 import type { BaselineLoad, BaselineStore } from "../ports/baseline-store";
@@ -8,14 +8,15 @@ import type { RepoFatalCode, RepoReader } from "../ports/repo-reader";
 import type { ScanContext, Scanner, ScannerEvent } from "../ports/scanner";
 import { applyBaseline } from "../policy/apply-baseline";
 import { dedupeSecrets } from "../policy/dedupe-secrets";
-import { exitCode, type FailOn } from "../policy/exit-code";
+import { exitCode } from "../policy/exit-code";
 import { findingId } from "../policy/finding-id";
 import { prioritize } from "../policy/prioritize";
 import { secretDraft, type SecretOccurrence } from "../policy/secret-draft";
 import { updateBaseline } from "../policy/update-baseline";
 
 export interface RunScanDeps {
-  repo: RepoReader;
+  /** Solo describe(): los métodos de lectura los usan los escáneres, no runScan. */
+  repo: Pick<RepoReader, "describe">;
   scanners: readonly Scanner[];
   baseline: BaselineStore;
   hash: Hasher;

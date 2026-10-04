@@ -1,8 +1,6 @@
-import type { Category, Finding, Severity } from "../domain/finding";
+import type { Category, FailOn, Finding } from "../domain/finding";
 import type { CategoryStatus } from "../domain/scan-result";
 import { SEVERITY_RANK } from "./severity";
-
-export type FailOn = Severity | "none";
 
 /**
  * 0 limpio · 1 hallazgos no suprimidos ≥ failOn · 2 scan incompleto (mvp §4.2).

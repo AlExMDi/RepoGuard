@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Baseline } from "../domain/baseline";
 import type { Category } from "../domain/finding";
 import type { CategoryStatus } from "../domain/scan-result";
-import { f } from "./test-findings";
+import { f } from "../testing/findings";
 import { updateBaseline, type UpdateBaselineInput } from "./update-baseline";
 
 const SALT = "ab".repeat(32);

@@ -3,7 +3,7 @@
 
 // Dominio
 export type { Baseline, BaselineEntry } from "./domain/baseline";
-export type { Category, Finding, FindingLocation, Severity } from "./domain/finding";
+export type { Category, FailOn, Finding, FindingLocation, Severity } from "./domain/finding";
 export type { RawSecretMatch } from "./domain/raw-secret-match";
 export type { CategoryReport, CategoryStatus, ScanResult } from "./domain/scan-result";
 export { SecretValue } from "./domain/secret-value";
@@ -17,7 +17,6 @@ export type { RepoDescription, RepoFatalCode, RepoInfo, RepoReader } from "./por
 export type { FindingDraft, ScanContext, Scanner, ScannerEvent } from "./ports/scanner";
 
 // Caso de uso
-export type { FailOn } from "./policy/exit-code";
 export {
   runScan,
   type RunScanDeps,
