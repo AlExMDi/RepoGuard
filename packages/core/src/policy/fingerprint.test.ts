@@ -27,9 +27,9 @@ describe("fingerprint", () => {
 
   it("rechaza sales que no son 32 bytes en hex", () => {
     for (const salt of ["", "ab", "zz".repeat(32), "ab".repeat(33)]) {
-      expect(() => fingerprint({ salt, ruleId: "r", value: new SecretValue("v") }, identityHex)).toThrow(
-        /salt/,
-      );
+      expect(() =>
+        fingerprint({ salt, ruleId: "r", value: new SecretValue("v") }, identityHex),
+      ).toThrow(/salt/);
     }
   });
 });

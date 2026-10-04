@@ -19,7 +19,13 @@ const dep = (version: string, osvId = "GHSA-xxxx"): FindingDraft => ({
   ruleId: osvId,
   severity: "high",
   title: "t",
-  location: { kind: "package", lockfile: "pnpm-lock.yaml", ecosystem: "npm", name: "lodash", version },
+  location: {
+    kind: "package",
+    lockfile: "pnpm-lock.yaml",
+    ecosystem: "npm",
+    name: "lodash",
+    version,
+  },
   vuln: { osvId, aliases: [], url: "https://osv.dev/x" },
 });
 
@@ -34,7 +40,9 @@ describe("findingId", () => {
     const base = findingId(misconfig("a.yml", 3), "job:build", identityHex);
     expect(findingId(misconfig("a.yml", 3), "job:test", identityHex)).not.toBe(base);
     expect(findingId(misconfig("b.yml", 3), "job:build", identityHex)).not.toBe(base);
-    expect(findingId(misconfig("a.yml", 3, "docker-root-user"), "job:build", identityHex)).not.toBe(base);
+    expect(findingId(misconfig("a.yml", 3, "docker-root-user"), "job:build", identityHex)).not.toBe(
+      base,
+    );
   });
 
   it("dependency: cambia con versión u osvId y no depende del anchor", () => {
@@ -54,7 +62,9 @@ describe("findingId", () => {
     const noVuln: FindingDraft = { ...dep("1.0.0") };
     delete noVuln.vuln;
     expect(findingId(noVuln, "", identityHex)).toBeNull();
-    expect(findingId({ ...misconfig("a", 1), location: dep("1").location }, "", identityHex)).toBeNull();
+    expect(
+      findingId({ ...misconfig("a", 1), location: dep("1").location }, "", identityHex),
+    ).toBeNull();
     expect(findingId({ ...misconfig("a", 1), category: "secret" }, "", identityHex)).toBeNull();
   });
 });

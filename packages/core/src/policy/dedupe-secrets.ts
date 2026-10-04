@@ -32,7 +32,12 @@ export function dedupeSecrets(occurrences: readonly SecretOccurrence[]): Finding
       severity: first.severity,
       title: first.title,
       location: { kind: "file", ...first.location },
-      secret: { redacted: first.redacted, length: first.length, inWorkingTree: inTree, occurrences: count },
+      secret: {
+        redacted: first.redacted,
+        length: first.length,
+        inWorkingTree: inTree,
+        occurrences: count,
+      },
       suppressed: false,
     }));
 }
