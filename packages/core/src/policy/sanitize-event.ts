@@ -110,14 +110,14 @@ export function sanitizeFindingDraft(input: unknown, expected: Category): Findin
 }
 
 export function sanitizeSecretMatch(input: unknown): RawSecretMatch | null {
-  if (!isObj(input) || !(input.value instanceof SecretValue)) return null;
+  if (!isObj(input) || !SecretValue.isGenuine(input.value)) return null;
   const { ruleId, severity, title, publicPrefix, kindLabel, value, inWorkingTree, ordinal } = input;
   if (!isStr(ruleId) || !SECRET_RULE_ID.test(ruleId)) return null;
   if (!isOneOf<Severity>(SEVERITIES, severity) || !isStr(title) || !isStr(kindLabel)) return null;
   if (typeof inWorkingTree !== "boolean" || !Number.isFinite(ordinal)) return null;
   if (publicPrefix !== null) {
     if (!isStr(publicPrefix) || publicPrefix.length > MAX_PUBLIC_PREFIX) return null;
-    if (!value.hasPrefix(publicPrefix)) return null;
+    if (!SecretValue.hasPrefix(value, publicPrefix)) return null;
   }
 
   if (!isObj(input.location)) return null;

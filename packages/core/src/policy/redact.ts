@@ -1,4 +1,4 @@
-import type { SecretValue } from "../domain/secret-value";
+import { SecretValue } from "../domain/secret-value";
 
 export interface RedactInput {
   publicPrefix: string | null;
@@ -8,12 +8,12 @@ export interface RedactInput {
 
 /**
  * `ghp_****` o `[private key, RSA]`, más la longitud aparte (mvp §7).
- * No lee el valor: el prefijo sale de la regla y la longitud del getter.
+ * No lee el valor: el prefijo sale de la regla y la longitud del campo privado.
  */
 export function redact({ publicPrefix, kindLabel, value }: RedactInput): {
   redacted: string;
   length: number;
 } {
   const redacted = publicPrefix === null ? `[${kindLabel}]` : `${publicPrefix}****`;
-  return { redacted, length: value.length };
+  return { redacted, length: SecretValue.lengthOf(value) };
 }

@@ -51,6 +51,47 @@ describe("SecretValue", () => {
     );
   });
 
+  describe("a prueba de imitaciones (revisión de seguridad M-2)", () => {
+    const real = new SecretValue("not-a-real-token-1234567890");
+
+    it("isGenuine solo acepta instancias reales, no Proxies ni objetos imitados", () => {
+      expect(SecretValue.isGenuine(real)).toBe(true);
+      expect(SecretValue.isGenuine(new Proxy(real, {}))).toBe(false);
+      expect(SecretValue.isGenuine(Object.create(SecretValue.prototype))).toBe(false);
+      expect(SecretValue.isGenuine({ length: 3 })).toBe(false);
+      expect(SecretValue.isGenuine(null)).toBe(false);
+      expect(SecretValue.isGenuine("texto")).toBe(false);
+    });
+
+    it("lengthOf lee el campo privado: una subclase no puede falsear la longitud", () => {
+      class Evil extends SecretValue {
+        override get length(): number {
+          return 999;
+        }
+      }
+      const evil = new Evil("abc");
+      expect(evil.length).toBe(999);
+      expect(SecretValue.lengthOf(evil)).toBe(3);
+    });
+  });
+
+  describe("oráculos acotados (revisión de seguridad B-1, M-3)", () => {
+    const v = new SecretValue("not-a-real-token-1234567890");
+
+    it("hasPrefix solo responde para prefijos de hasta 12 caracteres", () => {
+      expect(SecretValue.hasPrefix(v, "not-")).toBe(true);
+      expect(SecretValue.hasPrefix(v, "ghp_")).toBe(false);
+      // 13 caracteres correctos: false, para que no sirva para adivinar el secreto entero.
+      expect(SecretValue.hasPrefix(v, "not-a-real-to")).toBe(false);
+    });
+
+    it("occursIn detecta el valor completo dentro de un texto", () => {
+      expect(SecretValue.occursIn(v, "line: TOKEN=not-a-real-token-1234567890")).toBe(true);
+      expect(SecretValue.occursIn(v, "Fake token")).toBe(false);
+      expect(SecretValue.occursIn(new SecretValue(""), "cualquier cosa")).toBe(false);
+    });
+  });
+
   it("los tipos públicos no admiten material secreto ni texto libre", () => {
     const v = new SecretValue("x");
     const secret: NonNullable<Finding["secret"]> = {

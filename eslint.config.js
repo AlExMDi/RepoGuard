@@ -13,13 +13,20 @@ const nodeBuiltin = `^(node:.*|(${builtinModules.map(escape).join("|")})(/.*)?)$
 
 // Cualquier mención de unsafeReveal, no solo la llamada: así también se bloquean
 // la desestructuración, .call/.bind, los alias y el acceso con una clave de texto.
-const unsafeRevealMessage =
-  "unsafeReveal solo se permite en policy/fingerprint y en scanner-secrets (ADR 0008).";
-const unsafeRevealUse = [
-  { selector: "Identifier[name='unsafeReveal']", message: unsafeRevealMessage },
-  { selector: "Literal[value='unsafeReveal']", message: unsafeRevealMessage },
-  { selector: "TemplateElement[value.cooked='unsafeReveal']", message: unsafeRevealMessage },
+const mentions = (name, message) => [
+  { selector: `Identifier[name='${name}']`, message },
+  { selector: `Literal[value='${name}']`, message },
+  { selector: `TemplateElement[value.cooked='${name}']`, message },
 ];
+const unsafeRevealUse = mentions(
+  "unsafeReveal",
+  "unsafeReveal solo se permite en policy/fingerprint y en scanner-secrets (ADR 0008).",
+);
+// hasPrefix y occursIn responden preguntas sobre el valor: usados en bucle, servirían para
+// reconstruirlo. Solo los necesita la validación de eventos.
+const oracleUse = ["hasPrefix", "occursIn"].flatMap((name) =>
+  mentions(name, `${name} solo se permite en policy/sanitize-event (ADR 0008).`),
+);
 
 // La regla cubre también .js/.mts/.cts y ficheros fuera de src/.
 const allSources = ["packages/**/*.{ts,mts,cts,js,mjs,cjs}"];
@@ -28,16 +35,23 @@ export default defineConfig(
   { ignores: ["**/dist", "**/*.d.ts"] },
   js.configs.recommended,
   tseslint.configs.strict,
+  // Cada fichero recibe solo el permiso que necesita: revelar el valor o usar los oráculos.
   {
     files: allSources,
+    rules: { "no-restricted-syntax": ["error", ...unsafeRevealUse, ...oracleUse] },
+  },
+  {
+    files: ["packages/core/src/policy/fingerprint.ts", "packages/scanner-secrets/src/**/*.ts"],
+    rules: { "no-restricted-syntax": ["error", ...oracleUse] },
+  },
+  {
+    files: ["packages/core/src/policy/sanitize-event.ts"],
     rules: { "no-restricted-syntax": ["error", ...unsafeRevealUse] },
   },
   {
     files: [
       "packages/core/src/domain/secret-value.ts",
-      "packages/core/src/policy/fingerprint.ts",
       "packages/core/src/domain/secret-value.test.ts",
-      "packages/scanner-secrets/src/**/*.ts",
     ],
     rules: { "no-restricted-syntax": "off" },
   },
