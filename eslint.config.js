@@ -11,27 +11,30 @@ import tseslint from "typescript-eslint";
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const nodeBuiltin = `^(node:.*|(${builtinModules.map(escape).join("|")})(/.*)?)$`;
 
-const unsafeRevealCall = [
-  {
-    selector: "CallExpression[callee.property.name='unsafeReveal']",
-    message: "unsafeReveal solo se permite en policy/fingerprint y en scanner-secrets (ADR 0008).",
-  },
-  {
-    selector: "MemberExpression[computed=true][property.value='unsafeReveal']",
-    message: "unsafeReveal solo se permite en policy/fingerprint y en scanner-secrets (ADR 0008).",
-  },
+// Cualquier mención de unsafeReveal, no solo la llamada: así también se bloquean
+// la desestructuración, .call/.bind, los alias y el acceso con una clave de texto.
+const unsafeRevealMessage =
+  "unsafeReveal solo se permite en policy/fingerprint y en scanner-secrets (ADR 0008).";
+const unsafeRevealUse = [
+  { selector: "Identifier[name='unsafeReveal']", message: unsafeRevealMessage },
+  { selector: "Literal[value='unsafeReveal']", message: unsafeRevealMessage },
+  { selector: "TemplateElement[value.cooked='unsafeReveal']", message: unsafeRevealMessage },
 ];
+
+// La regla cubre también .js/.mts/.cts y ficheros fuera de src/.
+const allSources = ["packages/**/*.{ts,mts,cts,js,mjs,cjs}"];
 
 export default defineConfig(
   { ignores: ["**/dist", "**/*.d.ts"] },
   js.configs.recommended,
   tseslint.configs.strict,
   {
-    files: ["packages/*/src/**/*.ts"],
-    rules: { "no-restricted-syntax": ["error", ...unsafeRevealCall] },
+    files: allSources,
+    rules: { "no-restricted-syntax": ["error", ...unsafeRevealUse] },
   },
   {
     files: [
+      "packages/core/src/domain/secret-value.ts",
       "packages/core/src/policy/fingerprint.ts",
       "packages/core/src/domain/secret-value.test.ts",
       "packages/scanner-secrets/src/**/*.ts",
@@ -40,7 +43,7 @@ export default defineConfig(
   },
   {
     // core no hace E/S ni depende de otros paquetes (ADR 0001).
-    files: ["packages/core/src/**/*.ts"],
+    files: ["packages/core/**/*.{ts,mts,cts,js,mjs,cjs}"],
     rules: {
       "no-restricted-imports": [
         "error",

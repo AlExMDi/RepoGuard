@@ -31,8 +31,12 @@ Las dos invariantes se hacen cumplir en `eslint.config.js`:
   - `no-restricted-imports` con `node:*`, todos los `builtinModules` (con y sin subruta)
     y `@repoguard/*`.
   - `no-restricted-globals` con `process` y `Buffer`.
-- En `packages/*/src/**`, `no-restricted-syntax` sobre las llamadas a `unsafeReveal`,
-  incluido el acceso computado `x["unsafeReveal"]`. La regla se desactiva solo en
+- En `packages/**/*.{ts,mts,cts,js,mjs,cjs}` (no solo `src/`), `no-restricted-syntax`
+  sobre **cualquier mención** de `unsafeReveal`: el identificador (`Identifier`), una
+  clave de texto (`Literal`) o una plantilla (`TemplateElement`). Bloquear solo la
+  llamada `x.unsafeReveal()` no basta: `.call`, `.bind`, la desestructuración y los alias
+  la esquivaban (lo detectó la revisión de la rama `feat/3-core-domain`). La regla se
+  desactiva solo en `core/src/domain/secret-value.ts` (la definición),
   `core/src/policy/fingerprint.ts`, `core/src/domain/secret-value.test.ts` y
   `scanner-secrets/src/**`.
 
@@ -48,6 +52,9 @@ escribirla a mano, para que no se quede desfasada.
 | `eslint-plugin-boundaries` / Nx | Es una dependencia más para dos reglas que ESLint ya trae de serie. |
 
 ## Consecuencias
+
+- La regla protege frente a **errores accidentales**, no frente a alguien que quiera
+  saltársela a propósito: `v["unsafe" + "Reveal"]` sigue pasando. Para eso está la revisión.
 
 - `pnpm lint` (y por tanto CI) falla ante cualquier violación, y el editor la marca
   mientras se escribe. El mensaje cita el ADR.
