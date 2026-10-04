@@ -226,7 +226,8 @@ packages/core/src/ports/{scanner,baseline-store,repo-reader,crypto,clock}.ts
 packages/core/src/policy/{fingerprint,redact,dedupe-secrets,apply-baseline,prioritize,exit-code,finding-id,update-baseline}.ts
 packages/core/src/use-cases/run-scan.ts          ← carpeta nueva (ver §7)
 packages/core/src/index.ts                        reexporta la API pública
-packages/core/test/**                             tests + dobles en memoria
+packages/core/src/**/*.test.ts                    tests junto al código (vitest.config.ts solo busca en src/)
+packages/core/src/testing/fakes.ts                dobles en memoria (no se exportan desde index.ts)
 ```
 
 ## 5. Casos de test (los tests van primero)
@@ -268,10 +269,11 @@ packages/core/test/**                             tests + dobles en memoria
 ### 5.4 Invariantes del paquete
 - **No filtrado**: en todos los tests de `runScan`, `JSON.stringify(outcome)` y los
   argumentos de `save` no contienen ningún valor de `SecretValue` creado en el test.
-- **Uso de `unsafeReveal`**: un test hace grep de `packages/*/src` y falla si aparece
-  `unsafeReveal(` fuera de `policy/fingerprint.ts` y `packages/scanner-secrets/`.
-- **Pureza de core**: un test hace grep de `packages/core/src` y falla con
-  `from "node:`, `process.` o `Buffer` (es la mitigación que ADR 0001 deja pendiente).
+- **Uso de `unsafeReveal`** y **pureza de core**: los hace cumplir ESLint, no un test
+  ([ADR 0008](../adr/0008-invariantes-con-eslint.md)). `pnpm lint` falla si se llama a
+  `unsafeReveal` fuera de `policy/fingerprint.ts`, `secret-value.test.ts` y
+  `packages/scanner-secrets/`, y si core importa un built-in de Node (con o sin `node:`),
+  otro paquete `@repoguard/*`, `process` o `Buffer`.
 
 ## 6. Riesgos de seguridad
 
@@ -285,7 +287,7 @@ packages/core/test/**                             tests + dobles en memoria
 | Baseline corrupto reemplazado sin revisión, con una sal nueva | Se niega con `invalid-baseline` |
 | Un escáner con un bug emite un hallazgo de otra categoría para saltarse la deduplicación o el baseline | Validación del contrato (§2.2) |
 | Colisión de ids por concatenación ambigua | Codificación canónica en un array JSON (§2.3) |
-| Abuso de `unsafeReveal` en un paquete nuevo | Test de grep (§5.4) y revisión del agente `security-reviewer` |
+| Abuso de `unsafeReveal` en un paquete nuevo | Regla ESLint (§5.4, ADR 0008) y revisión del agente `security-reviewer` |
 
 ## 7. Decisiones resueltas tras la revisión
 - **Carpeta `use-cases/`** (confirmada): `runScan` llama a puertos, así que no es lógica
@@ -297,8 +299,8 @@ packages/core/test/**                             tests + dobles en memoria
 ## 8. Verificación de punta a punta
 Todavía no existen ni el CLI ni los adaptadores, así que la verificación de punta a punta
 es de core completo con dobles:
-1. `pnpm test packages/core` → todo en verde, incluidos los invariantes de §5.4.
-2. `pnpm typecheck && pnpm lint` → sin errores.
+1. `pnpm test packages/core` → todo en verde.
+2. `pnpm typecheck && pnpm lint` → sin errores (el lint incluye los invariantes de §5.4).
 3. Un test `run-scan.e2e.test.ts` monta un escenario que replica `known-repo` en memoria
    (secreto en 3 commits + árbol, `.env`, dependencia vulnerable y escáner de deps
    `incomplete`) y comprueba:
@@ -308,4 +310,5 @@ es de core completo con dobles:
    - con deps `complete` → `save` se llama, se repite el scan con ese baseline y da exit 0
      con todos los hallazgos `suppressed`;
    - ningún valor secreto de entrada aparece en la salida ni en el baseline guardado.
-4. `grep -rn 'unsafeReveal(' packages/*/src` → solo en los ficheros permitidos.
+4. Añadir temporalmente `import "node:fs"` o una llamada a `unsafeReveal()` en un fichero
+   de core no permitido → `pnpm lint` falla.
